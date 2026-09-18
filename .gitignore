@@ -1,11 +1,41 @@
-﻿.venv/
+# Virtual environments
+.venv/
 .venv-1/
 .venv313/
+env/
+
+# Secrets
 .env
+*.env
+!.env.example
+
+# Python
 __pycache__/
 *.pyc
 *.egg-info/
+build/
+dist/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Reports & logs
 reports/
+*.log
+audit.jsonl
 .future_admiral/
+
+# Data files (auto-generated ? do not commit)
+scan_results.csv
+technical_scan.csv
+paper_trades.csv
+.gsheet_sync_state.json
+scan_log.txt
+
+# IDE
 .vscode/
-.env
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
