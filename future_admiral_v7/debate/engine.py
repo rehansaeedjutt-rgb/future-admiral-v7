@@ -1,4 +1,4 @@
-﻿"""Future Admiral v7 - Debate Engine"""
+﻿"""Future Admiral v7 - Debate Engine (rich context, real prices)"""
 import concurrent.futures, json, sys
 from future_admiral_v7.config import cfg
 from future_admiral_v7.data.market import MarketData
@@ -13,21 +13,19 @@ from future_admiral_v7.audit.logger import log_event
 
 
 def _p(msg):
-    print(f"[ENGINE] {msg}", flush=True)
-    sys.stdout.flush()
+    print(f"[ENGINE] {msg}", flush=True); sys.stdout.flush()
 
 
 def _safe(fn, default, label, errors):
     try:
         return fn()
     except Exception as e:
-        errors.append(f"{label}: {type(e).__name__}: {e}")
+        errors.append(f"{label}: {e}")
         return default
 
 
 def _pick(tf_map, tf):
-    if not tf_map:
-        return None
+    if not tf_map: return None
     if tf in tf_map and tf_map[tf] is not None and not tf_map[tf].empty:
         return tf_map[tf]
     for df in tf_map.values():
@@ -36,16 +34,48 @@ def _pick(tf_map, tf):
     return None
 
 
+def _build_context(symbol, timeframe, tf_sum, structure, news, macro, fg, ob, fo):
+    """Compact but rich context with REAL numbers only."""
+    primary = tf_sum.get(timeframe) or (list(tf_sum.values())[0] if tf_sum else {})
+    lines = []
+    lines.append(f"Symbol: {symbol}")
+    lines.append(f"Timeframe: {timeframe}")
+    lines.append(f"Current price: {structure.get('last_close', primary.get('close'))}")
+    lines.append(f"Recent high (100 bars): {structure.get('recent_high')}")
+    lines.append(f"Recent low (100 bars): {structure.get('recent_low')}")
+    lines.append(f"Support levels: {structure.get('support', [])}")
+    lines.append(f"Resistance levels: {structure.get('resistance', [])}")
+    lines.append(f"Volume ratio (last/avg20): {structure.get('volume_ratio')}")
+    lines.append("")
+    lines.append("-- Multi-timeframe trend --")
+    for tf in ["1m","5m","15m","1h","4h","1d"]:
+        if tf in tf_sum:
+            f = tf_sum[tf]
+            lines.append(f"{tf}: close={f.get('close')} trend={f.get('trend')} rsi={f.get('rsi')} atr={f.get('atr')} ema20={f.get('ema20')} ema50={f.get('ema50')}")
+    lines.append("")
+    if macro:
+        lines.append(f"Macro: {json.dumps(macro, default=str)}")
+    if fg:
+        lines.append(f"Fear&Greed: {fg}")
+    if ob:
+        lines.append(f"Orderbook: {ob}")
+    if fo:
+        lines.append(f"Funding/OI: {fo}")
+    if news:
+        lines.append("-- Recent news headlines --")
+        for n in (news[:5] if isinstance(news, list) else []):
+            t = n.get("title", "") if isinstance(n, dict) else str(n)
+            lines.append(f"* {t[:120]}")
+    return "\n".join(lines)
+
+
 def run_debate(symbol, timeframe="15m", ui=None):
     errors = []
-
     def say(msg):
         _p(msg)
         try:
-            if ui is not None:
-                ui.write(msg)
-        except Exception:
-            pass
+            if ui is not None: ui.write(msg)
+        except Exception: pass
 
     say("Step 1/6: Data ingestion")
     md = MarketData()
@@ -58,83 +88,68 @@ def run_debate(symbol, timeframe="15m", ui=None):
         f_tf = ex.submit(_safe, lambda: md.multi_tf(symbol, kind), {}, "multi_tf", errors)
         f_news = ex.submit(_safe, lambda: fetch_news(symbol), [], "news", errors)
         f_macro = ex.submit(_safe, lambda: fetch_macro(), {}, "macro", errors)
-        f_fg = ex.submit(_safe, lambda: fear_greed(), {}, "fear_greed", errors)
-        f_ob = ex.submit(_safe, lambda: md.orderbook(symbol), {}, "orderbook", errors)
-        f_fo = ex.submit(_safe, lambda: md.funding_oi(symbol), {}, "funding_oi", errors)
-        tf_map = f_tf.result()
-        news = f_news.result()
-        macro = f_macro.result()
-        fg = f_fg.result()
-        ob = f_ob.result()
-        fo = f_fo.result()
-
-    _p(f"Got {len(tf_map)} timeframes, {len(news)} news items")
+        f_fg = ex.submit(_safe, lambda: fear_greed(), {}, "fg", errors)
+        f_ob = ex.submit(_safe, lambda: md.orderbook(symbol), {}, "ob", errors)
+        f_fo = ex.submit(_safe, lambda: md.funding_oi(symbol), {}, "fo", errors)
+        tf_map, news, macro, fg, ob, fo = f_tf.result(), f_news.result(), f_macro.result(), f_fg.result(), f_ob.result(), f_fo.result()
 
     if not tf_map:
-        say(f"No market data. Errors: {errors}")
         return {"symbol": symbol, "timeframe": timeframe, "bias": "neutral",
-                "confidence": 0.0, "reasons": [f"No data: {errors}"], "risks": [], "errors": errors}
+                "confidence": 0.0, "trade_type": "none",
+                "reasons": [f"No data: {errors}"], "risks": [], "errors": errors}
 
-    say("Step 2/6: Features")
+    say("Step 2/6: Features + market structure")
     tf_sum = _safe(lambda: multi_tf_summary(tf_map), {}, "tf_sum", errors)
     primary = _pick(tf_map, timeframe)
     structure = _safe(lambda: market_structure(primary), {}, "structure", errors) if primary is not None else {}
 
-    context = {
-        "symbol": symbol, "timeframe": timeframe,
-        "multi_timeframe": tf_sum, "structure": structure,
-        "news": news[:6] if isinstance(news, list) else news,
-        "macro": macro, "fear_greed": fg, "orderbook": ob, "funding_oi": fo,
-    }
-    try:
-        ctx_text = json.dumps(context, default=str)[:1200]
-    except Exception:
-        ctx_text = str(context)[:1200]
+    current_price = structure.get("last_close") or (tf_sum.get(timeframe, {}) or {}).get("close")
+    atr = (tf_sum.get(timeframe, {}) or {}).get("atr") or 0
+    support = structure.get("support", []) or []
+    resistance = structure.get("resistance", []) or []
 
-    say("Step 3/6: Running analysts")
+    ctx_text = _build_context(symbol, timeframe, tf_sum, structure, news, macro, fg, ob, fo)
+    _p(f"Context size: {len(ctx_text)} chars")
+
+    say("Step 3/6: Analysts")
     from future_admiral_v7.schema import AnalystView
     views = []
     analyst_fns = [
-        ("Technical Analyst", analysts.technical_agent),
-        ("News Analyst", analysts.news_agent),
-        ("Risk Officer", analysts.risk_agent),
+        ("Technical Analyst", analysts.technical_agent,
+         "Focus: trend (EMA stack), momentum (RSI/MACD), support/resistance levels, ATR."),
+        ("News Analyst", analysts.news_agent,
+         "Focus: recent news impact on price. Use headline timestamps."),
+        ("Risk Officer", analysts.risk_agent,
+         "Focus: downside risk, invalidation levels, volatility (ATR), volume anomalies."),
     ]
-    for role, fn in analyst_fns:
+    for role, fn, focus in analyst_fns:
         _p(f"  -> {role}")
         try:
-            v = fn(ctx_text)
+            v = fn(ctx_text, focus)
             views.append(v)
             _p(f"  <- {role}: {v.bias} ({v.confidence:.2f})")
         except Exception as e:
             errors.append(f"{role}: {e}")
             views.append(AnalystView(role=role, bias="neutral", confidence=0.3, score=0, key_points=[], risks=[]))
 
-    try:
-        log_event("analysts", {"symbol": symbol, "views": [v.model_dump() for v in views]})
-    except Exception:
-        pass
-
     say("Step 4/6: Bull/Bear debate")
-    try:
-        bull1 = debaters.bull_round1(views, ctx_text)
+    try: bull = debaters.bull_round1(views, ctx_text)
     except Exception as e:
-        errors.append(f"bull: {e}")
-        bull1 = {"thesis": "", "confidence": 0.5, "score": 0}
-    try:
-        bear1 = debaters.bear_round1(views, ctx_text)
+        errors.append(f"bull: {e}"); bull = {"thesis": "", "confidence": 0.5, "score": 0}
+    try: bear = debaters.bear_round1(views, ctx_text)
     except Exception as e:
-        errors.append(f"bear: {e}")
-        bear1 = {"thesis": "", "confidence": 0.5, "score": 0}
-    bull, bear = bull1, bear1
+        errors.append(f"bear: {e}"); bear = {"thesis": "", "confidence": 0.5, "score": 0}
 
-    say("Step 5/6: Admiral")
+    say("Step 5/6: Admiral (final decision)")
     try:
-        signal = admiral_final(symbol, timeframe, ctx_text, views, bull, bear, views[-1])
+        signal = admiral_final(symbol, timeframe, ctx_text, views, bull, bear, views[-1],
+                               support, resistance, current_price, atr)
     except Exception as e:
         errors.append(f"admiral: {e}")
         from future_admiral_v7.schema import TradeSignal
         signal = TradeSignal(symbol=symbol, timeframe=timeframe, bias="neutral",
-                             confidence=0.2, reasons=[f"admiral err: {e}"], risks=[])
+                             confidence=0.2, reasons=[f"admiral err: {e}"], risks=[],
+                             current_price=current_price)
 
     say("Step 6/6: Risk engine")
     try:
@@ -145,15 +160,14 @@ def run_debate(symbol, timeframe="15m", ui=None):
     try:
         signal.agents_summary = {
             "analysts": [v.model_dump() for v in views],
-            "bull": bull, "bear": bear, "context": context, "errors": errors,
+            "bull": bull, "bear": bear,
+            "context": {"structure": structure, "tf_summary": tf_sum, "support": support, "resistance": resistance},
+            "errors": errors,
         }
-    except Exception:
-        pass
+    except Exception: pass
 
-    try:
-        log_event("signal", signal.model_dump())
-    except Exception:
-        pass
+    try: log_event("signal", signal.model_dump())
+    except Exception: pass
 
     out = signal.model_dump()
     out["errors"] = errors

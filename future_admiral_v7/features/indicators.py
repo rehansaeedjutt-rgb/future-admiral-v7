@@ -1,72 +1,95 @@
-from __future__ import annotations
-
+﻿import pandas_ta as ta
 import pandas as pd
-
-try:
-    import pandas_ta as ta
-except ModuleNotFoundError as exc:  # pragma: no cover
-    raise ModuleNotFoundError(
-        "pandas-ta is missing in the active Python environment. "
-        "Run: .\\.venv313\\Scripts\\python.exe -m pip install pandas-ta"
-    ) from exc
+import numpy as np
 
 
 def tf_features(df: pd.DataFrame) -> dict:
     if df is None or len(df) < 50:
         return {}
-    data = df.copy()
-    data["ema20"] = ta.ema(data["close"], 20)
-    data["ema50"] = ta.ema(data["close"], 50)
-    data["ema200"] = ta.ema(data["close"], 200)
-    data["rsi"] = ta.rsi(data["close"], 14)
-    data["atr"] = ta.atr(data["high"], data["low"], data["close"], 14)
-
-    macd = ta.macd(data["close"])
+    df = df.copy()
+    df["ema20"] = ta.ema(df["close"], 20)
+    df["ema50"] = ta.ema(df["close"], 50)
+    df["ema200"] = ta.ema(df["close"], 200)
+    df["rsi"] = ta.rsi(df["close"], 14)
+    df["atr"] = ta.atr(df["high"], df["low"], df["close"], 14)
+    macd = ta.macd(df["close"])
     if macd is not None:
-        data = data.join(macd)
+        df = df.join(macd)
 
-    bb = ta.bbands(data["close"], 20, 2)
-    if bb is not None:
-        data = data.join(bb)
-
-    last = data.iloc[-1]
+    last = df.iloc[-1]
     trend = "range"
-    if last["ema20"] > last["ema50"] > last["ema200"]:
-        trend = "bull"
-    elif last["ema20"] < last["ema50"] < last["ema200"]:
-        trend = "bear"
+    if pd.notna(last["ema20"]) and pd.notna(last["ema50"]) and pd.notna(last["ema200"]):
+        if last["ema20"] > last["ema50"] > last["ema200"]:
+            trend = "bull"
+        elif last["ema20"] < last["ema50"] < last["ema200"]:
+            trend = "bear"
+
+    def _f(v, d=0.0):
+        return round(float(v), 4) if pd.notna(v) else d
 
     return {
-        "close": float(last["close"]),
-        "ema20": float(last["ema20"]),
-        "ema50": float(last["ema50"]),
-        "ema200": float(last["ema200"]),
-        "rsi": float(last["rsi"]) if pd.notna(last["rsi"]) else 50.0,
-        "atr": float(last["atr"]) if pd.notna(last["atr"]) else 0.0,
-        "macd_h": float(last.get("MACDh_12_26_9", 0)) if pd.notna(last.get("MACDh_12_26_9", 0)) else 0.0,
-        "bb_up": float(last.get("BBU_20_2.0", last["close"])),
-        "bb_lo": float(last.get("BBL_20_2.0", last["close"])),
-        "vwap": float(last.get("vwap", last["close"])),
+        "close": _f(last["close"]),
+        "ema20": _f(last["ema20"]),
+        "ema50": _f(last["ema50"]),
+        "ema200": _f(last["ema200"]),
+        "rsi": _f(last["rsi"], 50.0),
+        "atr": _f(last["atr"]),
+        "macd_h": _f(last.get("MACDh_12_26_9", 0)),
         "trend": trend,
     }
 
 
 def multi_tf_summary(tf_map: dict) -> dict:
-    summary = {}
-    for tf, frame in tf_map.items():
-        if frame is not None and len(frame) >= 50:
-            summary[tf] = tf_features(frame)
-    return summary
+    return {tf: tf_features(df) for tf, df in tf_map.items() if df is not None and len(df) >= 50}
 
 
-def market_structure(df: pd.DataFrame, lookback: int = 60) -> dict:
+def market_structure(df: pd.DataFrame, lookback: int = 100) -> dict:
+    """Real support/resistance + swing levels from actual OHLCV."""
     if df is None or len(df) < lookback:
         return {}
-    recent = df.tail(lookback)
-    highs = recent["high"].nlargest(3).tolist()
-    lows = recent["low"].nsmallest(3).tolist()
+    d = df.tail(lookback).copy()
+
+    # Pivot-based S/R (real institutional method)
+    highs = d["high"].values
+    lows = d["low"].values
+
+    pivot_highs = []
+    pivot_lows = []
+    for i in range(2, len(d) - 2):
+        if highs[i] > highs[i-1] and highs[i] > highs[i-2] and highs[i] > highs[i+1] and highs[i] > highs[i+2]:
+            pivot_highs.append(float(highs[i]))
+        if lows[i] < lows[i-1] and lows[i] < lows[i-2] and lows[i] < lows[i+1] and lows[i] < lows[i+2]:
+            pivot_lows.append(float(lows[i]))
+
+    # Cluster nearby levels (within 0.5% of each other)
+    def cluster(levels, tol=0.005):
+        if not levels:
+            return []
+        levels = sorted(levels)
+        clusters = [[levels[0]]]
+        for lvl in levels[1:]:
+            if abs(lvl - clusters[-1][-1]) / clusters[-1][-1] < tol:
+                clusters[-1].append(lvl)
+            else:
+                clusters.append([lvl])
+        return [round(sum(c)/len(c), 4) for c in clusters]
+
+    resistance = sorted(cluster(pivot_highs), reverse=True)[:3]
+    support = sorted(cluster(pivot_lows))[:3]
+
+    last_close = float(d["close"].iloc[-1])
+    recent_high = float(d["high"].max())
+    recent_low = float(d["low"].min())
+    avg_vol = float(d["volume"].tail(20).mean()) if "volume" in d.columns else 0
+    last_vol = float(d["volume"].iloc[-1]) if "volume" in d.columns else 0
+    vol_ratio = round(last_vol / avg_vol, 2) if avg_vol > 0 else 1.0
+
     return {
-        "resistance": sorted(highs, reverse=True),
-        "support": sorted(lows),
-        "last_close": float(recent["close"].iloc[-1]),
+        "last_close": round(last_close, 4),
+        "recent_high": round(recent_high, 4),
+        "recent_low": round(recent_low, 4),
+        "support": support,
+        "resistance": resistance,
+        "volume_ratio": vol_ratio,
+        "atr_pct": round((float(d["high"].iloc[-1] - d["low"].iloc[-1]) / last_close) * 100, 3),
     }

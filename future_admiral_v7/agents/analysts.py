@@ -1,57 +1,33 @@
+﻿"""Future Admiral v7 - Analyst agents"""
 from future_admiral_v7.agents.base import run_analyst
 
 
-def technical_agent(ctx: str):
-    return run_analyst(
-        "Technical Analyst",
-        ctx,
-        "Analyze multi-timeframe trend, RSI, EMA stack, MACD, ATR, support/resistance and structural bias.",
-    )
+def technical_agent(ctx, focus=""):
+    return run_analyst("Technical Analyst", ctx,
+                       focus or "Trend (EMA), RSI, MACD, support/resistance, ATR, volume.")
 
 
-def fundamental_agent(ctx: str):
-    return run_analyst(
-        "Fundamental Analyst",
-        ctx,
-        "Analyze valuation, growth, supply, business quality, and catalyst relevance where available.",
-    )
+def news_agent(ctx, focus=""):
+    return run_analyst("News Analyst", ctx,
+                       focus or "Recent news impact, catalysts, timestamps.")
 
 
-def news_agent(ctx: str):
-    return run_analyst(
-        "News Analyst",
-        ctx,
-        "Only use news newer than 48 hours. Weight by credibility and catalyst quality.",
-    )
+def risk_agent(ctx, focus=""):
+    return run_analyst("Risk Officer", ctx,
+                       focus or "Downside risk, invalidation, volatility.")
 
 
-def macro_agent(ctx: str):
-    return run_analyst(
-        "Macro Analyst",
-        ctx,
-        "Assess risk-on vs risk-off regime using VIX, DXY, US10Y, SPX, gold and global liquidity context.",
-    )
+def fundamental_agent(ctx, focus=""):
+    return run_analyst("Fundamental Analyst", ctx, focus or "Valuation, supply, adoption.")
 
 
-def sentiment_agent(ctx: str):
-    return run_analyst(
-        "Sentiment Analyst",
-        ctx,
-        "Analyze fear and greed, funding rate, orderbook imbalance, and crowd sentiment.",
-    )
+def macro_agent(ctx, focus=""):
+    return run_analyst("Macro Analyst", ctx, focus or "DXY, yields, VIX, risk regime.")
 
 
-def onchain_agent(ctx: str):
-    return run_analyst(
-        "OnChain Analyst",
-        ctx,
-        "Assess exchange flows, whale activity, funding, and open interest dynamics.",
-    )
+def sentiment_agent(ctx, focus=""):
+    return run_analyst("Sentiment Analyst", ctx, focus or "Fear/greed, funding, retail heat.")
 
 
-def risk_agent(ctx: str):
-    return run_analyst(
-        "Risk Officer",
-        ctx,
-        "Identify invalidation levels, drawdown risk, correlation risk, and event risk.",
-    )
+def onchain_agent(ctx, focus=""):
+    return run_analyst("OnChain Analyst", ctx, focus or "Exchange flows, whales, OI.")

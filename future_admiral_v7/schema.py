@@ -1,9 +1,6 @@
-from __future__ import annotations
-
+﻿from pydantic import BaseModel, Field
+from typing import Literal, List, Optional
 from datetime import datetime, timezone
-from typing import Any, Literal, List, Optional
-
-from pydantic import BaseModel, Field, field_validator
 
 
 class AnalystView(BaseModel):
@@ -21,23 +18,32 @@ class TradeSignal(BaseModel):
     bias: Literal["long", "short", "neutral"]
     confidence: float = Field(ge=0, le=1)
 
+    # Trade type and duration
+    trade_type: Literal["spot", "futures", "none"] = "none"
+    duration_hours: float = 0.0
+    reasoning_duration: str = ""
+
+    # Real price levels
+    current_price: Optional[float] = None
     entry: Optional[float] = None
     stop_loss: Optional[float] = None
     take_profit: List[float] = []
     invalidation: str = ""
 
+    # Support / Resistance from real data
+    support: List[float] = []
+    resistance: List[float] = []
+
+    # Risk
     position_size_pct: float = 0.0
     leverage: float = 1.0
     risk_reward: float = 0.0
 
+    # Narrative
     reasons: List[str] = []
     risks: List[str] = []
+    news_summary: List[str] = []
     sources: List[str] = []
 
     generated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    agents_summary: dict[str, Any] = {}
-
-    @field_validator("confidence")
-    @classmethod
-    def clamp_confidence(cls, value: float) -> float:
-        return max(0.0, min(1.0, value))
+    agents_summary: dict = {}
