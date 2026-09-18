@@ -1,5 +1,5 @@
 ﻿"""Future Admiral v7 - LLM Bridge (Groq primary + Ollama fallback)"""
-import json, os, re, sys, requests
+import json, os, re, sys, time, requests
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -22,9 +22,16 @@ def _call_groq(prompt, max_tokens=2500, timeout=90):
         "temperature": 0.1,
         "reasoning_effort": "low",
     }
-    r = requests.post(GROQ_URL, json=payload, headers=headers, timeout=timeout)
-    r.raise_for_status()
-    return r.json()["choices"][0]["message"].get("content", "") or ""
+    for attempt in range(3):
+        r = requests.post(GROQ_URL, json=payload, headers=headers, timeout=timeout)
+        if r.status_code == 429:
+            wait = 2 ** attempt * 5
+            _log(f"[LLM] Groq 429 rate limit - waiting {wait}s (attempt {attempt+1}/3)")
+            time.sleep(wait)
+            continue
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"].get("content", "") or ""
+    raise RuntimeError("Groq rate limit exceeded after 3 retries")
 
 
 def _call_ollama(prompt, max_tokens=800, timeout=360, json_mode=False):
@@ -54,13 +61,15 @@ def _try_providers(prompt, max_tokens):
             errors.append(f"groq: {str(e)[:80]}")
             _log(f"[LLM] Groq failed: {str(e)[:80]} -> Ollama")
 
-    _log(f"[LLM] Ollama {OLLAMA_MODEL}")
-    try:
-        text = _call_ollama(prompt, max_tokens=max_tokens, json_mode=True)
-        if text.strip():
-            return text, "ollama"
-    except Exception as e:
-        errors.append(f"ollama: {str(e)[:80]}")
+    # Ollama fallback disabled by default (unreliable for signals)
+    if os.getenv("ALLOW_OLLAMA_FALLBACK", "").lower() == "true":
+        _log(f"[LLM] Ollama {OLLAMA_MODEL}")
+        try:
+            text = _call_ollama(prompt, max_tokens=max_tokens, json_mode=True)
+            if text.strip():
+                return text, "ollama"
+        except Exception as e:
+            errors.append(f"ollama: {str(e)[:80]}")
 
     raise RuntimeError(f"All LLMs failed: {errors}")
 
