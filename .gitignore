@@ -1,0 +1,11 @@
+﻿.venv/
+.venv-1/
+.venv313/
+.env
+__pycache__/
+*.pyc
+*.egg-info/
+reports/
+.future_admiral/
+.vscode/
+.env
