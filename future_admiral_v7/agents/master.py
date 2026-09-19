@@ -20,6 +20,18 @@ def admiral_final(symbol, timeframe, context, analyst_views, bull, bear, risk_vi
     else:
         sl_long = sl_short = tp_long_1 = tp_long_2 = tp_short_1 = tp_short_2 = None
 
+    # Duration rules based on timeframe
+    duration_map = {
+        "1m": "15 minutes to 1 hour",
+        "5m": "30 minutes to 2 hours",
+        "15m": "1 to 4 hours",
+        "1h": "4 to 24 hours",
+        "4h": "1 to 3 days",
+        "1d": "3 to 14 days",
+        "1w": "2 to 8 weeks",
+    }
+    duration_rule = duration_map.get(timeframe, "1 to 4 hours")
+
     prompt = f"""You are the ADMIRAL (CIO). Make the FINAL trading decision.
 
 SYMBOL: {symbol}  TIMEFRAME: {timeframe}
@@ -37,6 +49,9 @@ ATR-BASED REFERENCE LEVELS (use these — R:R already >= 1.5):
 - If SHORT: entry≈{current_price}, SL≈{sl_short} (1.5x ATR above), TP1≈{tp_short_1}, TP2≈{tp_short_2}
 
 STRICT RULES:
+0. PRICE PRECISION: Return FULL price values. Do NOT round or truncate.
+   Example: DOGE=0.08723541, not 0.0872. SHIB=0.00001845, not 0.00001.
+   Use ALL available decimal places from the current_price field.
 1. Use the ATR-based levels above — they already give R:R >= 1.5.
 2. If most analysts bullish → LONG. If bearish → SHORT. If split → neutral.
 3. NEVER set SL further than 2.5x ATR from entry.
@@ -68,7 +83,36 @@ Return ONLY JSON:
         if not isinstance(tp, list):
             tp = [tp] if tp else []
 
-        return TradeSignal(
+        # Override LLM-rounded values with precise market values
+    if current_price:
+        if not data.get("entry") or abs(float(data.get("entry") or 0) - current_price) / current_price > 0.005:
+            data["entry"] = current_price
+        if data.get("stop_loss"):
+            sl_val = float(data["stop_loss"])
+            # Fix rounding: if SL rounds to entry, push away
+            if abs(sl_val - current_price) / current_price < 0.002:
+                if data.get("bias") == "long":
+                    data["stop_loss"] = round(current_price * 0.99, 8)
+                elif data.get("bias") == "short":
+                    data["stop_loss"] = round(current_price * 1.01, 8)
+        # Fix TPs
+        tps = data.get("take_profit") or []
+        fixed_tps = []
+        for tp in tps:
+            try:
+                tp_val = float(tp)
+                if abs(tp_val - current_price) / current_price < 0.001:
+                    if data.get("bias") == "long":
+                        tp_val = round(current_price * 1.02, 8)
+                    elif data.get("bias") == "short":
+                        tp_val = round(current_price * 0.98, 8)
+                fixed_tps.append(tp_val)
+            except Exception:
+                pass
+        if fixed_tps:
+            data["take_profit"] = fixed_tps
+
+    return TradeSignal(
             symbol=symbol, timeframe=timeframe,
             bias=data.get("bias", "neutral"),
             confidence=float(data.get("confidence", 0.3)),

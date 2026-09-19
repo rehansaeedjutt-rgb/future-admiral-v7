@@ -1,15 +1,16 @@
-﻿"""Future Admiral v7 - Market data with exchange fallback + all-symbols scan."""
+﻿"""Future Admiral v7 - Market data (MEXC primary, multi-exchange fallback)"""
 import ccxt
 import pandas as pd
-import time
 import sys
 
+# MEXC primary — user trades here
 EXCHANGES = [
-    ("coinbase", "crypto"),
-    ("kraken",   "crypto"),
-    ("okx",      "crypto"),
-    ("bybit",    "crypto"),
-    ("binance",  "crypto"),
+    ("mexc",    "crypto"),   # User's exchange — primary
+    ("bybit",   "crypto"),   # Fallback 1
+    ("okx",     "crypto"),   # Fallback 2
+    ("kraken",  "crypto"),   # Fallback 3 (privacy coins)
+    ("coinbase", "crypto"),  # Fallback 4
+    ("binance", "crypto"),   # Fallback 5
 ]
 
 _cached_client = None
@@ -24,48 +25,70 @@ def _get_working_exchange():
         return _cached_client, _cached_name
     for name, _ in EXCHANGES:
         try:
-            client = getattr(ccxt, name)({"enableRateLimit": True, "timeout": 15000})
+            client = getattr(ccxt, name)({"enableRateLimit": True, "timeout": 20000})
             try:
-                client.fetch_ohlcv("BTC/USDT", timeframe="1h", limit=5)
-                _log(f"Using exchange: {name}")
-                _cached_client = client; _cached_name = name
-                return client, name
-            except Exception:
-                try:
-                    client.fetch_ohlcv("BTC/USD", timeframe="1h", limit=5)
-                    _log(f"Using exchange: {name} (USD pairs)")
+                client.load_markets()
+                # Test with BTC/USDT (most common)
+                if "BTC/USDT" in client.markets:
+                    _log(f"Using exchange: {name}")
                     _cached_client = client; _cached_name = name
                     return client, name
-                except Exception as e:
-                    _log(f"{name} failed: {str(e)[:80]}"); continue
+                elif "BTC/USDC" in client.markets:
+                    _log(f"Using exchange: {name} (USDC)")
+                    _cached_client = client; _cached_name = name
+                    return client, name
+                elif "BTC/USD" in client.markets:
+                    _log(f"Using exchange: {name} (USD)")
+                    _cached_client = client; _cached_name = name
+                    return client, name
+                else:
+                    _log(f"{name}: no BTC pairs")
+                    continue
+            except Exception as e:
+                _log(f"{name} test failed: {str(e)[:80]}")
+                continue
         except Exception as e:
-            _log(f"{name} init failed: {str(e)[:80]}"); continue
-    _cached_client = ccxt.coinbase({"enableRateLimit": True, "timeout": 15000})
-    _cached_name = "coinbase"
+            _log(f"{name} init failed: {str(e)[:80]}")
+            continue
+    _log("WARNING: No exchange reachable. Using mexc as last resort.")
+    _cached_client = ccxt.mexc({"enableRateLimit": True, "timeout": 20000})
+    _cached_name = "mexc"
     return _cached_client, _cached_name
 
 
 def _symbol_variants(symbol):
-    base = symbol.split("/")[0].upper()
-    quote = symbol.split("/")[1].upper() if "/" in symbol else "USDT"
-    variants = [symbol]
-    if quote == "USDT":
-        variants.append(f"{base}/USD")
+    """Generate all possible symbol formats for MEXC/multi-exchange.
+    Priority: USDT (most liquid) > USDC > USD
+    """
     if "/" not in symbol:
-        variants.append(f"{symbol}/USDT")
-    return list(dict.fromkeys(variants))
+        base = symbol.upper()
+        return [f"{base}/USDT", f"{base}/USDC", f"{base}/USD"]
+    
+    base, quote = symbol.upper().split("/", 1)
+    
+    # If user specified USDT, try USDT first then fallbacks
+    if quote == "USDT":
+        return [f"{base}/USDT", f"{base}/USDC", f"{base}/USD"]
+    if quote == "USDC":
+        return [f"{base}/USDC", f"{base}/USDT", f"{base}/USD"]
+    if quote == "USD":
+        return [f"{base}/USD", f"{base}/USDT", f"{base}/USDC"]
+    
+    # Unknown quote — try all
+    return [f"{base}/USDT", f"{base}/USDC", f"{base}/USD"]
 
 
 class MarketData:
     def __init__(self):
         self.ex, self.name = _get_working_exchange()
+        self._markets_loaded = True
 
     def is_crypto(self, symbol):
         try:
             s = symbol.upper()
-            if s.endswith("USDT") or s.endswith("USD"):
-                return True
             if "/" in s:
+                return True
+            if s.endswith("USDT") or s.endswith("USD"):
                 return True
             return False
         except Exception:
@@ -73,6 +96,7 @@ class MarketData:
 
     def crypto_ohlcv(self, symbol, tf="15m", limit=500):
         last_err = None
+        # 1. Try primary exchange
         for sym_variant in _symbol_variants(symbol):
             try:
                 raw = self.ex.fetch_ohlcv(sym_variant, timeframe=tf, limit=limit)
@@ -82,8 +106,29 @@ class MarketData:
                 df["ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
                 return df.set_index("ts")
             except Exception as e:
-                last_err = e; continue
-        raise last_err or ValueError(f"No data for {symbol}")
+                last_err = e
+                continue
+
+        # 2. Per-symbol fallback — try Kraken, OKX, Bybit
+        _log(f"{symbol} not on {self.name}, trying fallbacks...")
+        for fb_name in ["kraken", "okx", "bybit", "coinbase"]:
+            try:
+                fb = getattr(ccxt, fb_name)({"enableRateLimit": True, "timeout": 20000})
+                for sym_variant in _symbol_variants(symbol):
+                    try:
+                        raw = fb.fetch_ohlcv(sym_variant, timeframe=tf, limit=limit)
+                        if not raw:
+                            continue
+                        df = pd.DataFrame(raw, columns=["ts","open","high","low","close","volume"])
+                        df["ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
+                        _log(f"  -> {symbol} found on {fb_name}")
+                        return df.set_index("ts")
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+
+        raise last_err or ValueError(f"No data for {symbol} on any exchange")
 
     def multi_tf(self, symbol, kind="crypto"):
         out = {}
@@ -119,12 +164,10 @@ class MarketData:
                 continue
         return {}
 
-    # ================= NEW: ALL SYMBOLS =================
     def get_all_tradable_symbols(self, quote="USDT"):
         """
-        Returns list of all active symbols on the working exchange.
-        Preserves the exchange's NATIVE symbol format (USD or USDT).
-        If quote is USDT, both USDT and USD pairs are returned (native format).
+        Returns list of all active symbols on MEXC.
+        Prefers USDT pairs (most liquid), falls back to USDC/USD.
         """
         try:
             self.ex.load_markets()
@@ -133,9 +176,7 @@ class MarketData:
             return []
 
         markets = self.ex.markets or {}
-        wanted_quotes = {quote}
-        if quote == "USDT":
-            wanted_quotes.add("USD")  # accept both
+        wanted_quotes = {quote, "USDT", "USDC", "USD"}
 
         out = set()
         for native_sym, m in markets.items():
@@ -147,9 +188,9 @@ class MarketData:
                 # Skip futures/options contracts
                 if ":" in native_sym or "-" in native_sym:
                     continue
-                # Skip stablecoins trading against each other
+                # Skip stablecoins
                 base = m.get("base", "")
-                if base in ("USDT", "USDC", "DAI", "BUSD", "TUSD", "USDP"):
+                if base in ("USDT", "USDC", "DAI", "BUSD", "TUSD", "USDP", "FDUSD"):
                     continue
                 out.add(native_sym)
             except Exception:

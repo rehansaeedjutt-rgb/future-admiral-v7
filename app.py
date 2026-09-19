@@ -1,8 +1,9 @@
 ﻿"""
 Future Admiral v7 - Institutional Trading Desk
-Complete: Light/Dark theme, Discord toggle, Auto-save, Google Sheet sync
+Full: Logo + Watermark + 1w TF + Support-based signals + Blue checkboxes
 """
 import streamlit as st
+import streamlit.components.v1 as components
 import time, traceback, os, csv, subprocess
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +16,25 @@ if "theme" not in st.session_state:
     st.session_state.theme = "dark"
 
 TRADES_FILE = Path("paper_trades.csv")
+
+def _fmt_price(v):
+    """Format price with full precision, trimming trailing zeros."""
+    if v is None:
+        return "—"
+    try:
+        f = float(v)
+        # For small numbers (< 1), show more decimals
+        if abs(f) < 0.01:
+            return f"{f:.8f}".rstrip("0").rstrip(".")
+        elif abs(f) < 1:
+            return f"{f:.6f}".rstrip("0").rstrip(".")
+        elif abs(f) < 100:
+            return f"{f:.4f}".rstrip("0").rstrip(".")
+        else:
+            return f"{f:.2f}"
+    except Exception:
+        return str(v)
+LOGO_FILE = Path("logo.png")
 
 
 # ============ PAPER TRADE HELPERS ============
@@ -64,20 +84,14 @@ def save_signal(symbol, timeframe, futures, spot):
 
 
 def sync_to_gsheets():
-    """Run sync_to_sheets.py using the same Python interpreter."""
     import sys
     try:
         script = str(Path.cwd() / "sync_to_sheets.py")
-        r = subprocess.run(
-            [sys.executable, script],
-            capture_output=True, text=True, timeout=90,
-            cwd=str(Path.cwd()),
-        )
+        r = subprocess.run([sys.executable, script], capture_output=True,
+                           text=True, timeout=90, cwd=str(Path.cwd()))
         out = (r.stdout or "").strip()
         err = (r.stderr or "").strip()
-
         if "Synced" in out and "Done" in out:
-            # Extract "Synced X/Y" line
             lines = [l for l in out.splitlines() if "Done" in l]
             detail = lines[-1] if lines else "Synced"
             return True, f"Synced to Google Sheets ({detail})"
@@ -85,8 +99,6 @@ def sync_to_gsheets():
             return True, "Google Sheets already up to date"
         if "not set" in out:
             return False, "GSHEET_WEBHOOK_URL missing in .env"
-
-        # Fallback — show real error
         msg = out[-200:] if out else (err[-200:] if err else "empty output")
         return False, f"Sync: {msg}"
     except Exception as e:
@@ -97,11 +109,11 @@ def sync_to_gsheets():
 theme = st.session_state.theme
 if theme == "dark":
     V = {
-        "bg":"#0b1020","bg2":"#131a2e","bg3":"#1a2340",
-        "border":"#232d4a","border2":"#3a4770",
-        "text":"#f1f5fb","text2":"#c4cde0","muted":"#7d8aa8","muted2":"#5a6786",
-        "accent":"#7ab8ff","green":"#4ade80","red":"#f87171","amber":"#fbbf24",
-        "btn":"#4f8cff","btn_border":"#6ba3ff","hover":"#1a2340",
+        "bg":"#0a0e1a","bg2":"#111827","bg3":"#1a2332",
+        "border":"#1f2937","border2":"#374151",
+        "text":"#f9fafb","text2":"#d1d5db","muted":"#9ca3af","muted2":"#6b7280",
+        "accent":"#60a5fa","green":"#34d399","red":"#f87171","amber":"#fbbf24",
+        "btn":"#3b82f6","btn_border":"#60a5fa","hover":"#1f2937",
     }
 else:
     V = {
@@ -112,6 +124,7 @@ else:
         "btn":"#2563eb","btn_border":"#3b82f6","hover":"#f4f6f9",
     }
 
+# ============ CSS ============
 st.markdown(f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
@@ -119,6 +132,24 @@ st.markdown(f"""
 .stApp {{ background: {V['bg']}; }}
 #MainMenu, footer, header {{ visibility: hidden; }}
 .block-container {{ padding-top: 1.5rem; padding-bottom: 3rem; max-width: 1600px; }}
+
+/* Watermark background */
+.stApp::before {{
+    content: "";
+    position: fixed;
+    top: 50%;
+    left: 55%;
+    width: 700px;
+    height: 700px;
+    transform: translate(-50%, -50%);
+    background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23ffffff" opacity="0.02"><path d="M3 17l6-6 4 4 8-8v10H3z"/></svg>');
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: contain;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.03;
+}}
 
 .fa-topbar {{ display:flex; align-items:center; gap:20px; padding:0 0 24px 0;
     border-bottom:1px solid {V['border']}; margin-bottom:28px; }}
@@ -133,18 +164,12 @@ st.markdown(f"""
 .fa-tag {{ font-size:10px; color:{V['muted']}; letter-spacing:1.5px;
     text-transform:uppercase; font-weight:600; margin-top:2px; }}
 .fa-right {{ margin-left:auto; display:flex; align-items:center; gap:20px; }}
-.fa-stat {{ display:flex; flex-direction:column; align-items:flex-end; }}
-.fa-stat-label {{ font-size:9px; color:{V['muted']}; letter-spacing:1px;
-    text-transform:uppercase; font-weight:600; }}
-.fa-stat-value {{ font-size:13px; color:{V['text']}; font-weight:700;
-    font-family:'JetBrains Mono',monospace; margin-top:2px; }}
 .fa-live {{ display:inline-flex; align-items:center; gap:7px; padding:6px 12px;
     background:rgba(63,185,80,0.12); border:1px solid rgba(63,185,80,0.4);
     border-radius:6px; color:{V['green']}; font-size:10px; font-weight:800;
     letter-spacing:1.2px; }}
 .fa-live-dot {{ width:6px; height:6px; background:{V['green']};
-    border-radius:50%; animation:blink 2s infinite; }}
-@keyframes blink {{ 0%,100%{{opacity:1}} 50%{{opacity:0.3}} }}
+    border-radius:50%; }}
 
 .sec-header {{ display:flex; align-items:center; gap:12px; margin:32px 0 16px 0; }}
 .sec-num {{ font-family:'JetBrains Mono',monospace; font-size:11px;
@@ -156,70 +181,60 @@ st.markdown(f"""
 .sec-line {{ flex:1; height:1px; background:{V['border']}; }}
 
 .verdict {{ padding:26px 30px; border-radius:12px; border-left:4px solid;
-    background:{V['bg2']}; margin-bottom:20px; box-shadow:0 1px 3px rgba(0,0,0,0.06); }}
-.verdict-long {{ border-left-color:{V['green']}; background:linear-gradient(90deg,rgba(63,185,80,0.08) 0%,{V['bg2']} 40%); }}
-.verdict-short {{ border-left-color:{V['red']}; background:linear-gradient(90deg,rgba(248,81,73,0.08) 0%,{V['bg2']} 40%); }}
-.verdict-neutral {{ border-left-color:{V['muted']}; background:linear-gradient(90deg,rgba(139,148,158,0.08) 0%,{V['bg2']} 40%); }}
-.verdict-buy {{ border-left-color:{V['green']}; background:linear-gradient(90deg,rgba(63,185,80,0.10) 0%,{V['bg2']} 40%); }}
-.verdict-wait {{ border-left-color:{V['amber']}; background:linear-gradient(90deg,rgba(210,153,34,0.10) 0%,{V['bg2']} 40%); }}
-.verdict-avoid {{ border-left-color:{V['red']}; background:linear-gradient(90deg,rgba(248,81,73,0.10) 0%,{V['bg2']} 40%); }}
+    background:{V['bg2']}; margin-bottom:20px; }}
+.verdict-long {{ border-left-color:{V['green']}; background:linear-gradient(90deg,rgba(52,211,153,0.08) 0%,{V['bg2']} 40%); }}
+.verdict-short {{ border-left-color:{V['red']}; background:linear-gradient(90deg,rgba(248,113,113,0.08) 0%,{V['bg2']} 40%); }}
+.verdict-neutral {{ border-left-color:{V['muted']}; }}
+.verdict-buy {{ border-left-color:{V['green']}; }}
+.verdict-wait {{ border-left-color:{V['amber']}; }}
+.verdict-avoid {{ border-left-color:{V['red']}; }}
 .verdict-top {{ display:flex; align-items:center; gap:16px; margin-bottom:12px; }}
 .verdict-tag {{ font-size:10px; color:{V['muted']}; letter-spacing:1.5px;
     text-transform:uppercase; font-weight:700; }}
-.verdict-action {{ font-size:22px; font-weight:800; color:{V['text']};
-    letter-spacing:-0.5px; }}
-.verdict-headline {{ font-size:15px; color:{V['text']}; font-weight:600;
-    line-height:1.4; margin-bottom:6px; }}
+.verdict-action {{ font-size:22px; font-weight:800; color:{V['text']}; }}
+.verdict-headline {{ font-size:15px; color:{V['text']}; font-weight:600; margin-bottom:6px; }}
 .verdict-desc {{ font-size:13px; color:{V['text2']}; line-height:1.55; }}
 
 .mgrid {{ display:grid; grid-template-columns:repeat(4,1fr); gap:1px;
     background:{V['border']}; border:1px solid {V['border']};
     border-radius:10px; overflow:hidden; margin:16px 0; }}
-.mcell {{ background:{V['bg2']}; padding:16px 18px; transition:background 0.15s; }}
-.mcell:hover {{ background:{V['hover']}; }}
+.mcell {{ background:{V['bg2']}; padding:16px 18px; }}
 .mcell-label {{ font-size:9px; color:{V['muted']}; letter-spacing:1.3px;
     text-transform:uppercase; font-weight:700; margin-bottom:8px; }}
 .mcell-value {{ font-family:'JetBrains Mono',monospace; font-size:18px;
-    color:{V['text']}; font-weight:600; letter-spacing:-0.3px; }}
+    color:{V['text']}; font-weight:600; }}
 .mcell-value.green {{ color:{V['green']}; }}
 .mcell-value.red {{ color:{V['red']}; }}
 .mcell-value.blue {{ color:{V['accent']}; }}
 .mcell-value.amber {{ color:{V['amber']}; }}
-.mcell-sub {{ font-size:10px; color:{V['muted']}; margin-top:4px; font-weight:500; }}
+.mcell-sub {{ font-size:10px; color:{V['muted']}; margin-top:4px; }}
 
 .info-panel {{ background:{V['bg2']}; border:1px solid {V['border']};
-    border-radius:10px; padding:20px 22px; margin:12px 0;
-    box-shadow:0 1px 2px rgba(0,0,0,0.04); }}
+    border-radius:10px; padding:20px 22px; margin:12px 0; }}
 .info-title {{ font-size:10px; color:{V['muted']}; letter-spacing:1.3px;
     text-transform:uppercase; font-weight:700; margin-bottom:12px; }}
 .info-item {{ font-size:13px; color:{V['text2']}; padding:7px 0 7px 18px;
-    position:relative; line-height:1.55;
-    border-bottom:1px solid {V['border']}; }}
+    position:relative; line-height:1.55; border-bottom:1px solid {V['border']}; }}
 .info-item:last-child {{ border-bottom:none; }}
 .info-item::before {{ content:""; position:absolute; left:4px; top:14px;
     width:4px; height:4px; background:{V['accent']}; border-radius:50%; }}
 
 .arow {{ display:flex; align-items:center; justify-content:space-between;
     padding:16px 20px; background:{V['bg2']}; border:1px solid {V['border']};
-    border-radius:8px; margin:8px 0; border-left:3px solid {V['border']};
-    box-shadow:0 1px 2px rgba(0,0,0,0.04); }}
+    border-radius:8px; margin:8px 0; border-left:3px solid {V['border']}; }}
 .arow.bull {{ border-left-color:{V['green']}; }}
 .arow.bear {{ border-left-color:{V['red']}; }}
 .arow.neutral {{ border-left-color:{V['muted']}; }}
 .arole {{ font-size:13px; color:{V['text']}; font-weight:600; }}
-.aconf {{ font-size:11px; color:{V['muted']}; margin-top:3px;
-    font-family:'JetBrains Mono',monospace; }}
+.aconf {{ font-size:11px; color:{V['muted']}; margin-top:3px; font-family:'JetBrains Mono',monospace; }}
 .apill {{ padding:5px 12px; border-radius:5px; font-size:10px; font-weight:800;
     letter-spacing:1px; font-family:'JetBrains Mono',monospace; }}
-.apill.bull {{ background:rgba(63,185,80,0.12); color:{V['green']};
-    border:1px solid rgba(63,185,80,0.3); }}
-.apill.bear {{ background:rgba(248,81,73,0.12); color:{V['red']};
-    border:1px solid rgba(248,81,73,0.3); }}
-.apill.neutral {{ background:rgba(139,148,158,0.12); color:{V['muted']};
-    border:1px solid rgba(139,148,158,0.3); }}
+.apill.bull {{ background:rgba(52,211,153,0.12); color:{V['green']}; border:1px solid rgba(52,211,153,0.3); }}
+.apill.bear {{ background:rgba(248,113,113,0.12); color:{V['red']}; border:1px solid rgba(248,113,113,0.3); }}
+.apill.neutral {{ background:rgba(156,163,175,0.12); color:{V['muted']}; border:1px solid rgba(156,163,175,0.3); }}
 
 .debate-card {{ background:{V['bg2']}; border:1px solid {V['border']};
-    border-radius:10px; padding:20px 22px; box-shadow:0 1px 2px rgba(0,0,0,0.04); }}
+    border-radius:10px; padding:20px 22px; }}
 .debate-card.bull {{ border-top:3px solid {V['green']}; }}
 .debate-card.bear {{ border-top:3px solid {V['red']}; }}
 .debate-label {{ font-size:10px; letter-spacing:1.5px; font-weight:800;
@@ -245,54 +260,65 @@ section[data-testid="stSidebar"] label {{
     padding:10px 12px; background:{V['bg']}; border:1px solid {V['border']};
     border-radius:6px; margin:6px 0; font-size:12px; color:{V['text2']}; }}
 .sb-dot {{ width:6px; height:6px; border-radius:50%; }}
-.sb-dot.on {{ background:{V['green']}; box-shadow:0 0 8px rgba(63,185,80,0.6); }}
+.sb-dot.on {{ background:{V['green']}; }}
 .sb-dot.off {{ background:{V['red']}; }}
 
-/* Streamlit widget overrides */
+/* Buttons — white text */
 .stButton > button, .stButton > button[kind="primary"],
 button[kind="primary"], button[kind="secondary"] {{
     color: #ffffff !important; font-weight: 700 !important; }}
 .stButton > button p, .stButton > button span, .stButton > button div {{
     color: #ffffff !important; }}
+
+/* Inputs */
 .stTextInput input, .stTextInput > div > div > input {{
     background: {V['bg2']} !important; color: {V['text']} !important;
     border: 1px solid {V['border2']} !important; border-radius: 8px !important;
     font-family: 'JetBrains Mono', monospace !important;
     font-weight: 600 !important; font-size: 13px !important;
     padding: 10px 14px !important; }}
+
+/* Selectbox */
 .stSelectbox div[data-baseweb="select"] > div {{
     background: {V['bg2']} !important; color: {V['text']} !important;
     border: 1px solid {V['border2']} !important; border-radius: 8px !important; }}
 .stSelectbox div[data-baseweb="select"] * {{
     color: {V['text']} !important; font-weight: 600 !important; }}
-[data-baseweb="popover"] {{ background: {V['bg2']} !important;
-    border: 1px solid {V['border']} !important; }}
-[data-baseweb="menu"] li {{ background: {V['bg2']} !important;
-    color: {V['text']} !important; }}
+[data-baseweb="popover"] {{ background: {V['bg2']} !important; }}
+[data-baseweb="menu"] li {{ background: {V['bg2']} !important; color: {V['text']} !important; }}
 [data-baseweb="menu"] li:hover {{ background: {V['hover']} !important; }}
+
+/* Checkbox — Blue, no red */
+.stCheckbox input[type="checkbox"] {{ accent-color: {V['accent']} !important; }}
+.stCheckbox [data-baseweb="checkbox"] div:first-child,
+div[data-baseweb="checkbox"] > div:first-child {{
+    background-color: {V['bg2']} !important;
+    border-color: {V['border2']} !important; }}
+.stCheckbox [data-baseweb="checkbox"][aria-checked="true"] div:first-child,
+div[data-baseweb="checkbox"] input:checked ~ div {{
+    background-color: {V['accent']} !important;
+    border-color: {V['accent']} !important; }}
+.stCheckbox svg {{ fill: #ffffff !important; color: #ffffff !important; }}
+
+/* Radio — pill style blue */
 .stRadio > div {{ display:flex; flex-direction:row; gap:6px;
     background:{V['bg']}; padding:4px; border:1px solid {V['border']};
     border-radius:10px; }}
 .stRadio > div > label {{ padding:8px 16px !important;
     border-radius:7px !important; background:transparent !important;
     color:{V['muted']} !important; font-weight:700 !important;
-    font-size:12px !important; letter-spacing:0.5px !important;
-    cursor:pointer !important; margin:0 !important; }}
-.stRadio > div > label:hover {{ background:{V['hover']} !important;
-    color:{V['text']} !important; }}
+    font-size:12px !important; cursor:pointer !important; margin:0 !important; }}
+.stRadio > div > label:hover {{ background:{V['hover']} !important; color:{V['text']} !important; }}
 .stRadio > div > label[data-checked="true"] {{
     background:{V['accent']} !important; color:#ffffff !important; }}
 .stRadio > div > label > div:first-child {{ display:none !important; }}
-.stCheckbox label span, .stCheckbox label p {{
-    color:{V['text2']} !important; font-weight:500 !important; }}
 
 .stTabs [data-baseweb="tab-list"] {{ gap:4px; background:transparent;
-    border-bottom:1px solid {V['border']}; padding-bottom:0; }}
-.stTabs [data-baseweb="tab"] {{ background:transparent; border:none;
-    border-radius:0; padding:12px 20px; color:{V['muted']};
-    font-weight:700; font-size:12px; letter-spacing:1.2px;
-    text-transform:uppercase; border-bottom:2px solid transparent;
-    margin-bottom:-1px; }}
+    border-bottom:1px solid {V['border']}; }}
+.stTabs [data-baseweb="tab"] {{ background:transparent; border:none; border-radius:0;
+    padding:12px 20px; color:{V['muted']}; font-weight:700; font-size:12px;
+    letter-spacing:1.2px; text-transform:uppercase;
+    border-bottom:2px solid transparent; margin-bottom:-1px; }}
 .stTabs [data-baseweb="tab"]:hover {{ color:{V['text2']}; }}
 .stTabs [aria-selected="true"] {{ background:transparent !important;
     color:{V['accent']} !important; border-bottom:2px solid {V['accent']} !important; }}
@@ -302,22 +328,13 @@ button[kind="primary"], button[kind="secondary"] {{
     padding:14px 24px; color:white; letter-spacing:0.5px; font-size:13px; }}
 .stButton > button[kind="primary"]:hover {{ background:{V['btn_border']}; }}
 
-.stDownloadButton > button {{ background:{V['bg2']} !important;
-    color:{V['text']} !important; border:1px solid {V['border2']} !important;
-    border-radius:8px !important; font-weight:600 !important; }}
-
 .fa-footer {{ margin-top:60px; padding-top:24px;
     border-top:1px solid {V['border']}; text-align:center;
-    color:{V['muted2']}; font-size:11px; letter-spacing:0.5px;
-    font-family:'JetBrains Mono',monospace; }}
-
-.stMarkdown, .stText, p, span, label {{ color:{V['text2']}; }}
-h1, h2, h3, h4, h5, h6 {{ color:{V['text']}; }}
+    color:{V['muted2']}; font-size:11px; font-family:'JetBrains Mono',monospace; }}
 </style>
 """, unsafe_allow_html=True)
 
-
-# ============ TOPBAR ============
+# ========== TOPBAR ==========
 st.markdown(f"""
 <div class="fa-topbar">
     <div class="fa-brand">
@@ -328,18 +345,23 @@ st.markdown(f"""
         </div>
     </div>
     <div class="fa-right">
-        <div class="fa-stat">
-            <div class="fa-stat-label">Session</div>
-            <div class="fa-stat-value">{datetime.now().strftime('%H:%M')} UTC+5</div>
-        </div>
         <div class="fa-live"><span class="fa-live-dot"></span>LIVE</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
 
-# ============ SIDEBAR ============
+# ========== SIDEBAR ==========
 with st.sidebar:
+    # Logo
+    if LOGO_FILE.exists():
+        st.image(str(LOGO_FILE), use_container_width=True)
+        st.markdown(
+            '<div style="text-align:center;font-size:9px;letter-spacing:2px;'
+            f'color:{V["muted"]};margin:-8px 0 16px 0;">INSTITUTIONAL TRADING DESK</div>',
+            unsafe_allow_html=True
+        )
+
     st.markdown('<div class="sb-title">Appearance</div>', unsafe_allow_html=True)
     tc = st.radio("Theme", ["Dark", "Light"],
                   index=0 if st.session_state.theme == "dark" else 1,
@@ -349,13 +371,27 @@ with st.sidebar:
         st.rerun()
 
     st.markdown('<div class="sb-title">Configuration</div>', unsafe_allow_html=True)
-    symbol = st.text_input("ASSET SYMBOL", value="XRP/USDT")
-    timeframe = st.selectbox("TIMEFRAME", ["1m","5m","15m","1h","4h","1d"], index=2)
+    symbol = st.text_input(
+        "ASSET SYMBOL",
+        value="XMR/USDT",
+        help="MEXC format: BTC/USDT, XMR/USDT, ETH/USDT, SOL/USDT. USDT most liquid."
+    )
+    timeframe = st.selectbox(
+        "TIMEFRAME",
+        ["1m", "5m", "15m", "1h", "4h", "1d", "1w"],
+        index=2
+    )
+
+    st.markdown(
+        f'<div style="font-size:9px;color:{V["muted"]};margin:-8px 0 12px 0;">'
+        f'Chart candles ka size. 15m = 15-min candles.</div>',
+        unsafe_allow_html=True
+    )
+
     send_discord_flag = st.checkbox("Send Discord Alert", value=False)
     auto_save_flag = st.checkbox("Auto-save to Paper Log", value=True)
     auto_gsheet_flag = st.checkbox("Auto-sync to Google Sheets", value=True)
 
-    st.markdown("")
     run = st.button("EXECUTE ANALYSIS", width="stretch", type="primary")
 
     st.markdown('<div class="sb-title">System Status</div>', unsafe_allow_html=True)
@@ -381,10 +417,10 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
 
-# ============ MAIN ============
+# ========== MAIN ==========
 if run and symbol:
     result = None
-    with st.status(f"Analyzing {symbol} across 12 data sources...", expanded=True) as status:
+    with st.status(f"Analyzing {symbol}...", expanded=True) as status:
         try:
             from future_admiral_v7.debate.engine import run_debate
             t = time.time()
@@ -402,7 +438,6 @@ if run and symbol:
         spot = result.get("spot", {}) or {}
         ap = spot.get("action_plan") or {}
 
-        # Auto-save
         if auto_save_flag:
             try:
                 save_signal(symbol, timeframe, futures, spot)
@@ -410,30 +445,23 @@ if run and symbol:
             except Exception as e:
                 st.warning(f"Save failed: {e}")
 
-        # Google Sheets sync
         if auto_gsheet_flag:
             ok, msg = sync_to_gsheets()
-            if ok:
-                st.success(msg)
-            else:
-                st.info(msg)
+            (st.success if ok else st.info)(msg)
 
-        # Discord
         if send_discord_flag:
             try:
                 from future_admiral_v7.alerts.discord import send_discord_embed
                 if send_discord_embed(futures):
                     st.success("Discord alert dispatched")
-                else:
-                    st.warning("Discord not configured")
-            except Exception as e:
-                st.warning(f"Discord error: {e}")
+            except Exception:
+                pass
 
         # Tabs
         tab_fut, tab_spot, tab_log, tab_scan, tab_data = st.tabs(
             ["FUTURES", "SPOT", "PAPER LOG", "SCAN ALL COINS", "RAW DATA"])
 
-        # -------- FUTURES --------
+        # ===== FUTURES =====
         with tab_fut:
             bias = (futures.get("bias") or "neutral").upper()
             conf = futures.get("confidence", 0) or 0
@@ -450,7 +478,15 @@ if run and symbol:
             reasons = futures.get("reasons") or []
             risks = futures.get("risks") or []
 
-            vclass = {"LONG":"verdict-long","SHORT":"verdict-short"}.get(bias, "verdict-neutral")
+            # Duration label per timeframe
+            dur_labels = {
+                "1m": "15min - 1h", "5m": "30min - 2h", "15m": "1 - 4h",
+                "1h": "4 - 24h", "4h": "1 - 3 days", "1d": "3 - 14 days",
+                "1w": "2 - 8 weeks",
+            }
+            dur_label = dur_labels.get(timeframe, f"{dur}h")
+
+            vclass = {"LONG": "verdict-long", "SHORT": "verdict-short"}.get(bias, "verdict-neutral")
             tp1 = tp[0] if len(tp) > 0 else "—"
             tp2 = tp[1] if len(tp) > 1 else "—"
 
@@ -460,7 +496,7 @@ if run and symbol:
                     <span class="verdict-tag">Futures Direction</span>
                     <span class="verdict-action">{bias}</span>
                 </div>
-                <div class="verdict-headline">Trade Type: {tt} &nbsp;·&nbsp; Duration: {dur}h &nbsp;·&nbsp; Confidence: {conf*100:.0f}%</div>
+                <div class="verdict-headline">Chart: {timeframe} &nbsp;·&nbsp; Hold: {dur_label} &nbsp;·&nbsp; Confidence: {conf*100:.0f}%</div>
                 <div class="verdict-desc">Invalidation: {inval}</div>
             </div>
             """, unsafe_allow_html=True)
@@ -491,7 +527,7 @@ if run and symbol:
             st.markdown('<div class="sec-header"><span class="sec-num">03</span><span class="sec-title">Analyst Panel</span><span class="sec-line"></span></div>', unsafe_allow_html=True)
             for a in futures.get("agents_summary", {}).get("analysts", []):
                 ab = a.get("bias", "neutral")
-                acls = {"bullish":"bull","bearish":"bear"}.get(ab, "neutral")
+                acls = {"bullish": "bull", "bearish": "bear"}.get(ab, "neutral")
                 st.markdown(f"""
                 <div class="arow {acls}">
                     <div>
@@ -523,7 +559,7 @@ if run and symbol:
                 </div>
                 """, unsafe_allow_html=True)
 
-        # -------- SPOT --------
+        # ===== SPOT =====
         with tab_spot:
             rec = (spot.get("recommendation") or "wait").upper()
             cp_s = spot.get("current_price")
@@ -574,7 +610,7 @@ if run and symbol:
             <div class="mgrid">
                 <div class="mcell"><div class="mcell-label">Recommendation</div><div class="mcell-value">{rec}</div></div>
                 <div class="mcell"><div class="mcell-label">Current Price</div><div class="mcell-value blue">{cp_s or '—'}</div></div>
-                <div class="mcell"><div class="mcell-label">Fundamental Score</div><div class="mcell-value {fcls}">{fund}/100</div></div>
+                <div class="mcell"><div class="mcell-label">Fundamental</div><div class="mcell-value {fcls}">{fund}/100</div></div>
                 <div class="mcell"><div class="mcell-label">Institutional</div><div class="mcell-value">{inst}</div></div>
             </div>
             """, unsafe_allow_html=True)
@@ -599,133 +635,80 @@ if run and symbol:
                 st.markdown('<div class="sec-header"><span class="sec-num">04</span><span class="sec-title">Investment Thesis</span><span class="sec-line"></span></div>', unsafe_allow_html=True)
                 st.markdown(f'<div class="info-panel"><div class="info-item">{spot["thesis"]}</div></div>', unsafe_allow_html=True)
 
-            st.markdown('<div class="sec-header"><span class="sec-num">05</span><span class="sec-title">Reasoning & Risks</span><span class="sec-line"></span></div>', unsafe_allow_html=True)
-            cr, ck = st.columns(2)
-            with cr:
-                rhtml = "".join(f'<div class="info-item">{r}</div>' for r in (spot.get("reasons") or [])[:6]) or '<div class="info-item">—</div>'
-                st.markdown(f'<div class="info-panel"><div class="info-title">Reasons</div>{rhtml}</div>', unsafe_allow_html=True)
-            with ck:
-                khtml = "".join(f'<div class="info-item">{r}</div>' for r in (spot.get("risks") or [])[:6]) or '<div class="info-item">—</div>'
-                st.markdown(f'<div class="info-panel"><div class="info-title">Risks</div>{khtml}</div>', unsafe_allow_html=True)
-
-            st.markdown('<div class="sec-header"><span class="sec-num">06</span><span class="sec-title">Spot Debate</span><span class="sec-line"></span></div>', unsafe_allow_html=True)
-            cb2, cs2 = st.columns(2)
-            with cb2:
-                st.markdown(f"""
-                <div class="debate-card bull">
-                    <div class="debate-label">Spot Bull</div>
-                    <div class="debate-text">{spot.get('bull_thesis') or '—'}</div>
-                    <div class="debate-conf">Confidence: {(spot.get('bull_confidence',0) or 0)*100:.0f}%</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with cs2:
-                st.markdown(f"""
-                <div class="debate-card bear">
-                    <div class="debate-label">Spot Bear</div>
-                    <div class="debate-text">{spot.get('bear_thesis') or '—'}</div>
-                    <div class="debate-conf">Confidence: {(spot.get('bear_confidence',0) or 0)*100:.0f}%</div>
-                </div>
-                """, unsafe_allow_html=True)
-
             if why or cm:
-                st.markdown('<div class="sec-header"><span class="sec-num">07</span><span class="sec-title">Decision Rationale</span><span class="sec-line"></span></div>', unsafe_allow_html=True)
+                st.markdown('<div class="sec-header"><span class="sec-num">05</span><span class="sec-title">Decision Rationale</span><span class="sec-line"></span></div>', unsafe_allow_html=True)
                 whtml = "".join(f'<div class="info-item">{w}</div>' for w in why)
                 cmhtml = f'<div class="info-item"><b>Change mind if:</b> {cm}</div>' if cm else ''
                 st.markdown(f'<div class="info-panel">{whtml}{cmhtml}</div>', unsafe_allow_html=True)
 
-            if spot.get("institutional_evidence") or spot.get("onchain_evidence"):
-                st.markdown('<div class="sec-header"><span class="sec-num">08</span><span class="sec-title">Institutional & On-Chain Evidence</span><span class="sec-line"></span></div>', unsafe_allow_html=True)
-                ev = (spot.get("institutional_evidence") or []) + (spot.get("onchain_evidence") or [])
-                evhtml = "".join(f'<div class="info-item">{e}</div>' for e in ev[:6])
-                st.markdown(f'<div class="info-panel">{evhtml}</div>', unsafe_allow_html=True)
-
-        # -------- PAPER LOG --------
+        # ===== PAPER LOG =====
         with tab_log:
             trades = load_trades()
             st.markdown('<div class="sec-header"><span class="sec-num">LOG</span><span class="sec-title">Paper Trade History</span><span class="sec-line"></span></div>', unsafe_allow_html=True)
-
             if not trades:
                 st.info("No paper trades yet.")
             else:
-                total = len(trades)
-                st.markdown(f"""
-                <div class="mgrid">
-                    <div class="mcell"><div class="mcell-label">Total Signals</div><div class="mcell-value">{total}</div></div>
-                    <div class="mcell"><div class="mcell-label">File</div><div class="mcell-value" style="font-size:11px">{TRADES_FILE.name}</div></div>
-                    <div class="mcell"><div class="mcell-label">First</div><div class="mcell-value" style="font-size:11px">{trades[0].get('timestamp','')[:16]}</div></div>
-                    <div class="mcell"><div class="mcell-label">Latest</div><div class="mcell-value" style="font-size:11px">{trades[-1].get('timestamp','')[:16]}</div></div>
-                </div>
-                """, unsafe_allow_html=True)
-
-                csv_data = TRADES_FILE.read_text(encoding="utf-8")
-                st.download_button(
-                    label="DOWNLOAD CSV (for Google Sheets)",
-                    data=csv_data,
-                    file_name=f"paper_trades_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                    mime="text/csv",
-                )
-
-                st.markdown("**Recent Signals** (latest 20)")
-                cols = ["timestamp","symbol","fut_timeframe","fut_bias","fut_entry","fut_sl","fut_tp1","spot_action","outcome"]
-                # Normalize timeframe key
+                st.markdown(f"**Total: {len(trades)}** signals")
                 display = []
                 for t in trades[-20:]:
                     display.append({
-                        "timestamp": t.get("timestamp",""),
-                        "symbol": t.get("symbol",""),
-                        "timeframe": t.get("timeframe","") or t.get("fut_timeframe",""),
-                        "fut_bias": t.get("fut_bias",""),
-                        "fut_entry": t.get("fut_entry",""),
-                        "fut_sl": t.get("fut_sl",""),
-                        "fut_tp1": t.get("fut_tp1",""),
-                        "spot_action": t.get("spot_action",""),
-                        "outcome": t.get("outcome",""),
+                        "Time": t.get("timestamp", ""),
+                        "Symbol": t.get("symbol", ""),
+                        "TF": t.get("timeframe", ""),
+                        "Bias": t.get("fut_bias", ""),
+                        "Entry": t.get("fut_entry", ""),
+                        "SL": t.get("fut_sl", ""),
+                        "TP1": t.get("fut_tp1", ""),
+                        "Outcome": t.get("outcome", ""),
                     })
                 st.dataframe(display, width="stretch", hide_index=True)
-                st.caption("Open this CSV in Excel or upload to Google Sheets to track outcomes.")
+                csv_data = TRADES_FILE.read_text(encoding="utf-8")
+                st.download_button("DOWNLOAD CSV", data=csv_data,
+                                   file_name=f"paper_trades_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                                   mime="text/csv")
 
-        # -------- SCAN ALL COINS --------
+        # ===== SCAN ALL COINS =====
         with tab_scan:
             st.markdown('<div class="sec-header"><span class="sec-num">SCAN</span><span class="sec-title">Multi-Coin Scanner</span><span class="sec-line"></span></div>', unsafe_allow_html=True)
-            st.caption("Scan every available coin on the exchange. Results saved to scan_results.csv.")
+            st.caption("Tier 1 = pure math (fast, free). Tier 2 = LLM on top 10.")
 
-            c1, c2, c3 = st.columns(3)
-            scan_limit = c1.number_input("Limit (0 = all)", min_value=0, value=10, step=5, key="scan_lim")
-            scan_min = c2.number_input("Min score", min_value=1, value=5, step=1, key="scan_min")
-            scan_sleep = c3.number_input("Delay (sec)", min_value=0.0, value=0.5, step=0.1, key="scan_sleep")
-
-            if st.button("SCAN ALL COINS", type="primary", key="scan_btn"):
-                with st.status("Scanning exchange...", expanded=True) as sstatus:
+            st.markdown("#### Tier 1: Technical Scanner")
+            tech_limit = st.number_input("Coins (0 = all)", min_value=0, value=50, step=10, key="tech_lim")
+            tech_sleep = st.number_input("Delay (sec)", min_value=0.0, value=0.3, step=0.1, key="tech_sleep")
+            if st.button("RUN TECHNICAL SCAN", type="secondary"):
+                with st.status("Technical scanning...", expanded=True) as ts:
                     try:
-                        from batch_scanner import scan as run_scan
-                        results = run_scan(limit=int(scan_limit), sleep_sec=float(scan_sleep), min_score=int(scan_min))
-                        sstatus.update(label=f"Scan complete — {len(results)} strong signals", state="complete", expanded=False)
-                        if results:
-                            st.dataframe(results, width="stretch", hide_index=True)
-                        else:
-                            st.info("No signals above min score.")
+                        from technical_scanner import scan_all as tech_scan
+                        res = tech_scan(limit=int(tech_limit), sleep_sec=float(tech_sleep))
+                        ts.update(label=f"Done — {len(res)} coins", state="complete", expanded=False)
+                        if res:
+                            import pandas as _pd
+                            st.dataframe(_pd.DataFrame(res).sort_values("score", ascending=False),
+                                         width="stretch", hide_index=True)
                     except Exception as e:
-                        sstatus.update(label="Scan failed", state="error", expanded=True)
+                        ts.update(label="Failed", state="error")
                         st.error(f"{type(e).__name__}: {e}")
 
-            # Show previous results
-            from pathlib import Path as _P
-            scan_csv = _P("scan_results.csv")
-            if scan_csv.exists():
-                st.markdown('<div class="sec-header"><span class="sec-num">HIST</span><span class="sec-title">Previous Scan Results</span><span class="sec-line"></span></div>', unsafe_allow_html=True)
-                try:
-                    import pandas as _pd
-                    df_scan = _pd.read_csv(scan_csv)
-                    st.dataframe(df_scan.tail(50), width="stretch", hide_index=True)
-                    st.download_button("DOWNLOAD scan_results.csv", data=scan_csv.read_text(), file_name="scan_results.csv", mime="text/csv", key="scan_dl")
-                except Exception as e:
-                    st.warning(f"Could not read scan_results.csv: {e}")
+            st.markdown("---")
+            st.markdown("#### Tier 2: LLM Analysis")
+            llm_limit = st.number_input("Top N coins", min_value=1, value=10, step=5, key="llm_lim")
+            llm_min = st.number_input("Min score", min_value=1, value=5, step=1, key="llm_min")
+            if st.button("RUN LLM SCAN", type="primary"):
+                with st.status("LLM scanning...", expanded=True) as ls:
+                    try:
+                        from batch_scanner import scan as llm_scan
+                        res2 = llm_scan(limit=int(llm_limit), sleep_sec=3.0, min_score=int(llm_min))
+                        ls.update(label=f"Done — {len(res2)} signals", state="complete", expanded=False)
+                        if res2:
+                            st.dataframe(res2, width="stretch", hide_index=True)
+                    except Exception as e:
+                        ls.update(label="Failed", state="error")
+                        st.error(f"{type(e).__name__}: {e}")
 
-        # -------- RAW DATA --------
+        # ===== RAW DATA =====
         with tab_data:
             st.markdown('<div class="sec-header"><span class="sec-num">DATA</span><span class="sec-title">Complete JSON Output</span><span class="sec-line"></span></div>', unsafe_allow_html=True)
             st.json(result)
-
 
 st.markdown("""
 <div class="fa-footer">
